@@ -122,9 +122,9 @@ class ListingsHandler(BaseHandler):
 
         try:
             # build up the listings
-            userResponse = yield http_client.fetch("https://listing99.herokuapp.com/listings"+queryString, method="POST", body='', headers=headers, connect_timeout=20.0, request_timeout=20.0)
-            userJson = json.loads(userResponse.body)
-            self.write_json({"result": True, "user": userJson})
+            listingResponse = yield http_client.fetch("https://listing99.herokuapp.com/listings"+queryString, method="POST", body='', headers=headers, connect_timeout=20.0, request_timeout=20.0)
+            listingJson = json.loads(listingResponse.body)
+            self.write_json({"listing": listingJson['listing']})
         except tornado.httpclient.HTTPError as e:
             print(e)
         except Exception as e:
@@ -167,10 +167,14 @@ class UsersHandler(BaseHandler):
     @tornado.gen.coroutine
     def post(self):
         self.args = json.loads(self.request.body)
+        
         # Collecting required params
         name = self.args["name"]
+
         errors = []
         name_val = self._validate_name(name, errors)
+        name_val = name_val.replace(" ", "%20")
+        print(name_val)
 
         # End if we have any validation errors
         if len(errors) > 0:
@@ -178,6 +182,7 @@ class UsersHandler(BaseHandler):
             return
         
         queryString = "?name={0}".format(name_val)
+        print(queryString)
 
         headers={
             "Access-Control-Allow-Origin": '*',
@@ -192,7 +197,7 @@ class UsersHandler(BaseHandler):
             # build up the listings
             userResponse = yield http_client.fetch("https://users99.herokuapp.com/users"+queryString, method="POST", body='', connect_timeout=20.0, request_timeout=20.0, headers=headers)
             userJson = json.loads(userResponse.body)
-            self.write_json({"result": True, "user": userJson})
+            self.write_json({"user": userJson['user']})
         except tornado.httpclient.HTTPError as e:
             print(e)
         except Exception as e:
