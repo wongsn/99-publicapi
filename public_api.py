@@ -1,36 +1,16 @@
 import tornado.web
 import tornado.log
 import tornado.options
-import sqlite3
 import logging
 import json
 import time
+
+import tornado.httpclient
 
 class App(tornado.web.Application):
 
     def __init__(self, handlers, **kwargs):
         super().__init__(handlers, **kwargs)
-
-        # Initialising db connection
-        self.db = sqlite3.connect("listings.db")
-        self.db.row_factory = sqlite3.Row
-        self.init_db()
-
-    def init_db(self):
-        cursor = self.db.cursor()
-
-        # Create table
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS 'listings' ("
-            + "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
-            + "user_id INTEGER NOT NULL,"
-            + "listing_type TEXT NOT NULL,"
-            + "price INTEGER NOT NULL,"
-            + "created_at INTEGER NOT NULL,"
-            + "updated_at INTEGER NOT NULL"
-            + ");"
-        )
-        self.db.commit()
 
 class BaseHandler(tornado.web.RequestHandler):
     def write_json(self, obj, status_code=200):
@@ -38,7 +18,7 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_status(status_code)
         self.write(json.dumps(obj))
 
-# /listings
+# /public-api/listings
 class ListingsHandler(BaseHandler):
     @tornado.gen.coroutine
     def get(self):
@@ -68,23 +48,7 @@ class ListingsHandler(BaseHandler):
                 self.write_json({"result": False, "errors": "invalid user_id"}, status_code=400)
                 return
 
-        # Building select statement
-        select_stmt = "SELECT * FROM listings"
-        # Adding user_id filter clause if param is specified
-        if user_id is not None:
-            select_stmt += " WHERE user_id=?"
-        # Order by and pagination
-        limit = page_size
-        offset = (page_num - 1) * page_size
-        select_stmt += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 
-        # Fetching listings from db
-        if user_id is not None:
-            args = (user_id, limit, offset)
-        else:
-            args = (limit, offset)
-        cursor = self.application.db.cursor()
-        results = cursor.execute(select_stmt, args)
 
         listings = []
         for row in results:
@@ -172,6 +136,20 @@ class ListingsHandler(BaseHandler):
         else:
             return price
 
+
+class UsersHandler(BaseHandler):
+    @tornado.gen.coroutine
+    async def get(self):
+        http_client = tornado.httpclient.HTTPClient()
+        try:
+            response = http_client.fetch("https://users99.herokuapp.com/users/ping")
+            self.write_json({"data": response})
+        except tornado.httpclient.HTTPError as e:
+            print(e)
+        except Exception as e:
+            print(e)
+        http_client.close()
+
 # /listings/ping
 class PingHandler(tornado.web.RequestHandler):
     @tornado.gen.coroutine
@@ -180,8 +158,9 @@ class PingHandler(tornado.web.RequestHandler):
 
 def make_app(options):
     return App([
-        (r"/listings/ping", PingHandler),
-        (r"/listings", ListingsHandler),
+        (r"/public-api/ping", PingHandler),
+        (r"/public-api/listing", ListingsHandler),
+        (r"/public-api/users", UsersHandler)
     ], debug=options.debug)
 
 if __name__ == "__main__":
