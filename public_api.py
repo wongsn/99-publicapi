@@ -5,7 +5,8 @@ import logging
 import json
 import time
 import os
-
+import json
+import re
 import tornado.httpclient
 
 class App(tornado.web.Application):
@@ -15,6 +16,10 @@ class App(tornado.web.Application):
 
 class BaseHandler(tornado.web.RequestHandler):
     def write_json(self, obj, status_code=200):
+        self.set_header("Access-Control-Allow-Origin", '*')
+        self.set_header("Access-Control-Allow-Headers", 'Content-Type')
+        self.set_header('Access-Control-Allow-Methods', 'GET')
+        self.set_header('Access-Control-Allow-Credentials', 'None')
         self.set_header("Content-Type", "application/json")
         self.set_status(status_code)
         self.write(json.dumps(obj))
@@ -23,7 +28,7 @@ class BaseHandler(tornado.web.RequestHandler):
 class ListingsHandler(BaseHandler):
     @tornado.gen.coroutine
     def get(self):
-        # Parsing pagination params
+         # Parsing pagination params
         page_num = self.get_argument("page_num", 1)
         page_size = self.get_argument("page_size", 10)
         try:
@@ -49,62 +54,81 @@ class ListingsHandler(BaseHandler):
                 self.write_json({"result": False, "errors": "invalid user_id"}, status_code=400)
                 return
 
+        # Build up the queryString
+        queryString = '?page_num={0}&page_size={1}'.format(page_num, page_size)
+        userQuery = ""
 
+        if user_id is not None:
+            userQuery = 'user_id={0}'.format(user_id)
+            queryString += userQuery
 
-        listings = []
-        for row in results:
-            fields = ["id", "user_id", "listing_type", "price", "created_at", "updated_at"]
-            listing = {
-                field: row[field] for field in fields
-            }
-            listings.append(listing)
+        http_client = tornado.httpclient.AsyncHTTPClient()
 
-        self.write_json({"result": True, "listings": listings})
+        try:
+            # build up the listings
+            listingResponse = yield http_client.fetch("https://listing99.herokuapp.com/listings"+ queryString)
+            listingJson = json.loads(listingResponse.body)
+            listingsResult = listingJson["listings"]
+
+            # get corresponding users
+            userResponse = yield http_client.fetch("https://users99.herokuapp.com/users?" + userQuery)
+            userJson = json.loads(userResponse.body)
+            usersResult = userJson["users"]
+
+            # adds user object for each listing
+            for listing in listingsResult:
+                userRef = listing["user_id"]
+                for user in usersResult:
+                    if user["id"] == userRef:
+                        listing["user"] = user
+                        listing.pop("user_id")
+
+            self.write_json({"result":True, "listings": listingsResult})
+            
+        except tornado.httpclient.HTTPError as e:
+            print(e)
+        except Exception as e:
+            print(e)
 
     @tornado.gen.coroutine
     def post(self):
         # Collecting required params
-        user_id = self.get_argument("user_id")
-        listing_type = self.get_argument("listing_type")
-        price = self.get_argument("price")
+        self.args = json.loads(self.request.body)
+        user_id = self.args["user_id"]
+        listing_type = self.args["listing_type"]
+        price = self.args["price"]
 
         # Validating inputs
         errors = []
         user_id_val = self._validate_user_id(user_id, errors)
         listing_type_val = self._validate_listing_type(listing_type, errors)
         price_val = self._validate_price(price, errors)
-        time_now = int(time.time() * 1e6) # Converting current time to microseconds
 
         # End if we have any validation errors
         if len(errors) > 0:
             self.write_json({"result": False, "errors": errors}, status_code=400)
             return
 
-        # Proceed to store the listing in our db
-        cursor = self.application.db.cursor()
-        cursor.execute(
-            "INSERT INTO 'listings' "
-            + "('user_id', 'listing_type', 'price', 'created_at', 'updated_at') "
-            + "VALUES (?, ?, ?, ?, ?)",
-            (user_id_val, listing_type_val, price_val, time_now, time_now)
-        )
-        self.application.db.commit()
+        queryString = "?user_id={0}&listing_type={1}&price={2}".format(user_id_val, listing_type_val, price_val)
 
-        # Error out if we fail to retrieve the newly created listing
-        if cursor.lastrowid is None:
-            self.write_json({"result": False, "errors": ["Error while adding listing to db"]}, status_code=500)
-            return
+        headers={
+            "Access-Control-Allow-Origin": '*',
+            "Access-Control-Allow-Headers": 'Content-Type',
+            'Access-Control-Allow-Methods': 'POST, GET',
+            "Content-Type": "application/json"
+        }
 
-        listing = dict(
-            id=cursor.lastrowid,
-            user_id=user_id_val,
-            listing_type=listing_type_val,
-            price=price_val,
-            created_at=time_now,
-            updated_at=time_now
-        )
+        http_client = tornado.httpclient.AsyncHTTPClient()
 
-        self.write_json({"result": True, "listing": listing})
+        try:
+            # build up the listings
+            userResponse = yield http_client.fetch("https://listing99.herokuapp.com/listings"+queryString, method="POST", body='', headers=headers, connect_timeout=20.0, request_timeout=20.0)
+            userJson = json.loads(userResponse.body)
+            self.write_json({"result": True, "user": userJson})
+        except tornado.httpclient.HTTPError as e:
+            print(e)
+        except Exception as e:
+            print(e)
 
     def _validate_user_id(self, user_id, errors):
         try:
@@ -139,17 +163,52 @@ class ListingsHandler(BaseHandler):
 
 
 class UsersHandler(BaseHandler):
+   
     @tornado.gen.coroutine
-    async def get(self):
-        http_client = tornado.httpclient.HTTPClient()
+    def post(self):
+        self.args = json.loads(self.request.body)
+        # Collecting required params
+        name = self.args["name"]
+        errors = []
+        name_val = self._validate_name(name, errors)
+
+        # End if we have any validation errors
+        if len(errors) > 0:
+            self.write_json({"result": False, "errors": errors}, status_code=400)
+            return
+        
+        queryString = "?name={0}".format(name_val)
+
+        headers={
+            "Access-Control-Allow-Origin": '*',
+            "Access-Control-Allow-Headers": 'Content-Type',
+            'Access-Control-Allow-Methods': 'POST, GET',
+            "Content-Type": "application/json"
+        }
+
+        http_client = tornado.httpclient.AsyncHTTPClient()
+
         try:
-            response = http_client.fetch("https://users99.herokuapp.com/users/ping")
-            self.write_json({"data": response})
+            # build up the listings
+            userResponse = yield http_client.fetch("https://users99.herokuapp.com/users"+queryString, method="POST", body='', connect_timeout=20.0, request_timeout=20.0, headers=headers)
+            userJson = json.loads(userResponse.body)
+            self.write_json({"result": True, "user": userJson})
         except tornado.httpclient.HTTPError as e:
             print(e)
         except Exception as e:
             print(e)
-        http_client.close()
+
+    def _validate_name(self, name, errors):
+    
+        # Generic RegEx matcher for name validation
+        # https://stackoverflow.com/questions/61690985/python-regular-expression-to-validate-name-with-one-or-more-words
+        match = re.match(r"^[\-'a-zA-Z ]+$", name)
+        if match:
+            return name
+        else:
+            logging.exception("Error while parsing: {}".format(name))
+            errors.append("invalid name sequence")
+            return None
 
 # /listings/ping
 class PingHandler(tornado.web.RequestHandler):
@@ -160,7 +219,7 @@ class PingHandler(tornado.web.RequestHandler):
 def make_app(options):
     return App([
         (r"/public-api/ping", PingHandler),
-        (r"/public-api/listing", ListingsHandler),
+        (r"/public-api/listings", ListingsHandler),
         (r"/public-api/users", UsersHandler)
     ], debug=options.debug)
 
@@ -177,13 +236,12 @@ if __name__ == "__main__":
 
     # Access the settings defined
     options = tornado.options.options
-
+    
     # Create web app
     app = make_app(options)
     port = int(os.environ.get("PORT", options.port))
     app.listen(port)
     logging.info("Starting user service. PORT: {}, DEBUG: {}".format(port, options.debug))
-
 
     # Start event loop
     tornado.ioloop.IOLoop.instance().start()
