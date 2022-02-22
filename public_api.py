@@ -179,8 +179,10 @@ if __name__ == "__main__":
 
     # Create web app
     app = make_app(options)
-    app.listen(options.port)
-    logging.info("Starting listing service. PORT: {}, DEBUG: {}".format(options.port, options.debug))
+    port = int(os.environ.get("PORT", options.port))
+    app.listen(port)
+    logging.info("Starting user service. PORT: {}, DEBUG: {}".format(port, options.debug))
+
 
     # Start event loop
     tornado.ioloop.IOLoop.instance().start()
